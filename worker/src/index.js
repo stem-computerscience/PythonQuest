@@ -84,6 +84,35 @@ if(deleteAttempt&&request.method==="POST"){
  return reply({ok:true,deleted:result.meta?.changes||0});
 }
 if(path==="/api/progress"&&request.method==="GET"){const row=await env.DB.prepare("SELECT data,updated_at FROM saves WHERE user_id=?").bind(user.id).first();return reply({progress:row?JSON.parse(row.data):null,updated_at:row?.updated_at||null});}
+const safeNickname=s=>typeof s==="string"&&/^[a-zA-Z0-9][a-zA-Z0-9 _-]{2,19}$/.test(s);
+if(path==="/api/leaderboard/nickname"&&request.method==="POST"){
+ if(user.role!=="student")return reply({error:"Student only"},403);
+ const b=await parse(request),nickname=String(b.nickname||"").trim();
+ if(!safeNickname(nickname))return reply({error:"Use 3–20 letters, numbers, spaces, hyphens or underscores."},400);
+ const saved=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();
+ let p={};try{p=JSON.parse(saved?.data||"{}")}catch{}
+ p.leaderboardNicknamePending=nickname;
+ await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(p)).run();
+ return reply({ok:true,pending:true});
+}
+if(path==="/api/leaderboard/nicknames"&&request.method==="GET"){
+ if(user.role!=="teacher")return reply({error:"Advisor only"},403);
+ const rows=await env.DB.prepare("SELECT u.id,u.username,s.data FROM users u JOIN saves s ON s.user_id=u.id WHERE u.role='student'").all();
+ return reply({requests:rows.results.flatMap(row=>{let p={};try{p=JSON.parse(row.data||"{}")}catch{}return p.leaderboardNicknamePending?[{id:row.id,username:row.username,nickname:p.leaderboardNicknamePending}]:[];})});
+}
+const nicknameReview=path.match(/^\/api\/leaderboard\/nicknames\/([a-f0-9-]{36})\/review$/i);
+if(nicknameReview&&request.method==="POST"){
+ if(user.role!=="teacher")return reply({error:"Advisor only"},403);
+ const b=await parse(request);if(typeof b.approve!=="boolean")return reply({error:"Invalid decision"},400);
+ const saved=await env.DB.prepare("SELECT saves.data FROM saves JOIN users ON users.id=saves.user_id WHERE saves.user_id=? AND users.role='student'").bind(nicknameReview[1]).first();
+ if(!saved)return reply({error:"Student not found"},404);
+ let p={};try{p=JSON.parse(saved.data||"{}")}catch{}
+ if(!p.leaderboardNicknamePending)return reply({error:"No pending nickname"},400);
+ if(b.approve){const name=p.leaderboardNicknamePending;const all=await env.DB.prepare("SELECT data FROM saves WHERE user_id<>?").bind(nicknameReview[1]).all();const taken=all.results.some(row=>{try{return JSON.parse(row.data||"{}").leaderboardNickname?.toLowerCase()===name.toLowerCase()}catch{return false}});if(taken)return reply({error:"Nickname already in use"},409);p.leaderboardNickname=name;}
+ delete p.leaderboardNicknamePending;
+ await env.DB.prepare("UPDATE saves SET data=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?").bind(JSON.stringify(p),nicknameReview[1]).run();
+ return reply({ok:true,approved:b.approve});
+}
 if(path==="/api/leaderboard/opt-in"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
  const body=await parse(request);if(typeof body.optIn!=="boolean")return reply({error:"optIn must be boolean"},400);
@@ -96,8 +125,8 @@ if(path==="/api/leaderboard/opt-in"&&request.method==="POST"){
 if(path==="/api/leaderboard"&&request.method==="GET"){
  if(user.role!=="student"&&user.role!=="teacher")return reply({error:"Unauthorized"},403);
  const rows=await env.DB.prepare("SELECT u.username,s.data FROM users u JOIN saves s ON s.user_id=u.id WHERE u.role='student' AND u.active=1").all();
- const players=rows.results.flatMap(row=>{let p={};try{p=JSON.parse(row.data||"{}")}catch{}return p.leaderboardOptIn===true?[{username:row.username,chapter:Math.max(1,Math.min(6,Number(p.mission)||1)),xp:Math.max(0,Math.min(600,Number(p.xp)||0))}]:[];});
- players.sort((a,b)=>b.xp-a.xp||b.chapter-a.chapter||a.username.localeCompare(b.username));
+ const players=rows.results.flatMap(row=>{let p={};try{p=JSON.parse(row.data||"{}")}catch{}return p.leaderboardOptIn===true&&safeNickname(p.leaderboardNickname)?[{nickname:p.leaderboardNickname,chapter:Math.max(1,Math.min(6,Number(p.mission)||1)),xp:Math.max(0,Math.min(600,Number(p.xp)||0))}]:[];});
+ players.sort((a,b)=>b.xp-a.xp||b.chapter-a.chapter||a.nickname.localeCompare(b.nickname));
  return reply({players:players.slice(0,50)});
 }
 if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")return reply({error:"Student only"},403);const b=await parse(request);if(!b||typeof b!=="object"||Array.isArray(b)||JSON.stringify(b).length>16000)return reply({error:"Invalid progress"},400);const existing=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();let previous={};try{previous=existing?JSON.parse(existing.data):{}}catch{}const requestedMission=Math.max(1,Math.min(6,Number(b.mission)||1));const previousMission=Math.max(1,Math.min(6,Number(previous.mission)||1));if(requestedMission>previousMission){
@@ -106,7 +135,7 @@ if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")ret
  const boss=previousMission%4===0;
  const allowed=records.results.some(row=>{let e={};try{e=JSON.parse(row.evidence||"{}")}catch{}return boss?((!!e.submittedBossAt&&(row.success===1||e.clubAcknowledgment?.complete===true))||(e.teacherApproval?.approved===true)):row.success===1;});
  if(!allowed)return reply({error:boss?"Complete the boss project through practice checks or advisor acknowledgment.":"Complete the practice challenge before advancing."},403);
-}const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:requestedMission,xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid",skills:Array.isArray(previous.skills)?previous.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(1,Math.min(2,Number(previous.releasedRegion)||Math.ceil((Number(previous.mission)||1)/4))),leaderboardOptIn:previous.leaderboardOptIn===true};if(progress.mission>progress.releasedRegion*4)return reply({error:"This region has not been released by your teacher"},403);await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
+}const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:requestedMission,xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid",skills:Array.isArray(previous.skills)?previous.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(1,Math.min(2,Number(previous.releasedRegion)||Math.ceil((Number(previous.mission)||1)/4))),leaderboardOptIn:previous.leaderboardOptIn===true,leaderboardNickname:previous.leaderboardNickname||null,leaderboardNicknamePending:previous.leaderboardNicknamePending||null};if(progress.mission>progress.releasedRegion*4)return reply({error:"This region has not been released by your teacher"},403);await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
 if(path==="/api/skills/complete"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
  const b=await parse(request),skill=Number(b.skill);
