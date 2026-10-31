@@ -131,7 +131,7 @@ if(path==="/api/club/badges/catalog"&&request.method==="POST"){
  return reply({badge},201);
 }
 
-const saveBadgeCatalog=async defs=>{const row=await env.DB.prepare("SELECT u.id,s.data FROM users u LEFT JOIN saves s ON s.user_id=u.id WHERE u.role='teacher' ORDER BY u.id LIMIT 1").first();if(!row)return false;let p={};try{p=JSON.parse(row.data||"{}")}catch{}p.clubBadgeCatalog=defs;await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(row.id,JSON.stringify(p)).run();return true;};
+async function saveBadgeCatalog(defs){const row=await env.DB.prepare("SELECT u.id,s.data FROM users u LEFT JOIN saves s ON s.user_id=u.id WHERE u.role='teacher' ORDER BY u.id LIMIT 1").first();if(!row)return false;let p={};try{p=JSON.parse(row.data||"{}")}catch{}p.clubBadgeCatalog=defs;await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(row.id,JSON.stringify(p)).run();return true;}
 if(path==="/api/club/badges/catalog/manage"&&request.method==="POST"){
  if(user.role!=="teacher")return reply({error:"Advisor only"},403);
  const b=await parse(request),defs=await badgeCatalog(env);
