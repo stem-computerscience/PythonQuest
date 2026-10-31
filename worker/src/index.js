@@ -118,7 +118,7 @@ if(nicknameReview&&request.method==="POST"){
 }
 const CLUB_AWARD_IDS=["mentor","teamwork","creativity","debugger"];
 const validBadgeId=(id,defs)=>CLUB_AWARD_IDS.includes(id)||(typeof id==="string"&&Array.isArray(defs)&&defs.some(d=>d.id===id));
-const badgeCatalog=async env=>{const row=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind("club:badge-catalog").first();let defs=[];try{defs=JSON.parse(row?.data||"[]")}catch{}return Array.isArray(defs)?defs:[];};
+const badgeCatalog=async env=>{const row=await env.DB.prepare("SELECT s.data FROM saves s JOIN users u ON u.id=s.user_id WHERE u.role='teacher' ORDER BY u.id LIMIT 1").first();let defs=[];try{defs=JSON.parse(row?.data||"{}").clubBadgeCatalog||[]}catch{}return Array.isArray(defs)?defs:[];};
 if(path==="/api/club/badges/catalog"&&request.method==="GET"){return reply({badges:await badgeCatalog(env)});}
 if(path==="/api/club/badges/catalog"&&request.method==="POST"){
  if(user.role!=="teacher")return reply({error:"Advisor only"},403);
