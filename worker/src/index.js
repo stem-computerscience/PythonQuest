@@ -19,12 +19,21 @@ if(path==="/api/login"&&request.method==="POST"){const b=await parse(request);co
 const user=await auth(request,env);if(!user)return reply({error:"Unauthorized"},401);
 if(path==="/api/logout"&&request.method==="POST"){const token=request.headers.get("authorization").slice(7);await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?").bind(await digest(token)).run();return reply({ok:true});}
 if(path==="/api/me"&&request.method==="GET")return reply({user});
+function provisionalRubric(b){
+ const code=b.code,output=b.output.trim(),expected=["Hello, Python!","Ada","20","Access granted","0\\n1\\n2","2"][b.mission-1];
+ const patterns=[/\\bmessage\\s*=/,/\\bexplorer\\s*=/,/\\benergy\\s*=.*\\+/,/\\bif\\b[\\s\\S]*>=/,/\\bfor\\b[\\s\\S]*\\brange\\s*\\(/,/\\binventory\\s*=\\s*\\[[\\s\\S]*\\blen\\s*\\(/];
+ const correctness=b.mode==="terminal"&&b.success&&output===expected?40:0;
+ const concepts=b.mode==="terminal"&&patterns[b.mission-1].test(code)&&b.evidence?.conceptOk===true&&b.evidence?.valueOk===true?30:0;
+ const quality=code.trim()&&!code.split("\\n").some(x=>x.length>120)?20:0;
+ const problemSolving=b.success?10:0;
+ return {correctness,concepts,quality,problemSolving,total:correctness+concepts+quality+problemSolving,verified:false,passing:false};
+}
 if(path==="/api/attempts"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
  const b=await parse(request);
  if(typeof b.code!=="string"||b.code.length>12000||!["space","dungeon"].includes(b.world)||!["hybrid","code","terminal"].includes(b.mode)||!Number.isInteger(b.mission)||b.mission<1||b.mission>6||typeof b.output!=="string"||b.output.length>4000||typeof b.success!=="boolean")return reply({error:"Invalid attempt"},400);
- const id=random(),evidence=b.evidence&&typeof b.evidence==="object"?{conceptOk:b.evidence.conceptOk===true,valueOk:b.evidence.valueOk===true}:null;
- await env.DB.prepare("INSERT INTO attempts(id,user_id,mission,world,mode,code,output,success,evidence) VALUES(?,?,?,?,?,?,?,?,?)").bind(id,user.id,b.mission,b.world,b.mode,b.code,b.output,b.success?1:0,JSON.stringify(evidence)).run();
+ const rubric=provisionalRubric(b);const id=random(),evidence=b.evidence&&typeof b.evidence==="object"?{conceptOk:b.evidence.conceptOk===true,valueOk:b.evidence.valueOk===true}:null;
+ await env.DB.prepare("INSERT INTO attempts(id,user_id,mission,world,mode,code,output,success,evidence) VALUES(?,?,?,?,?,?,?,?,?)").bind(id,user.id,b.mission,b.world,b.mode,b.code,b.output,b.success?1:0,JSON.stringify({...evidence,rubric})).run();
  return reply({ok:true,id},201);
 }
 const attemptsMatch=path.match(/^\/api\/students\/([a-f0-9-]{36})\/attempts$/i);
@@ -34,6 +43,17 @@ if(attemptsMatch&&request.method==="GET"){
  if(!student)return reply({error:"Student not found"},404);
  const rows=await env.DB.prepare("SELECT id,mission,world,mode,code,output,success,evidence,created_at FROM attempts WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 100").bind(student.id).all();
  return reply({student:student.username,attempts:rows.results.map(x=>({...x,success:!!x.success,evidence:JSON.parse(x.evidence||"null")}))});
+}
+const gradeMatch=path.match(/^\/api\/attempts\/([a-f0-9-]{36})\/grade$/i);
+if(gradeMatch&&request.method==="POST"){
+ if(user.role!=="teacher")return reply({error:"Teacher only"},403);
+ const b=await parse(request),scores=b.scores;
+ if(!scores||!["correctness","concepts","quality","problemSolving"].every((k,i)=>Number.isInteger(scores[k])&&scores[k]>=0&&scores[k]<=[40,30,20,10][i])||typeof b.feedback!=="string"||b.feedback.length>2000)return reply({error:"Invalid rubric scores or feedback"},400);
+ const record=await env.DB.prepare("SELECT evidence FROM attempts WHERE id=?").bind(gradeMatch[1]).first();if(!record)return reply({error:"Attempt not found"},404);
+ const evidence=JSON.parse(record.evidence||"{}");const total=scores.correctness+scores.concepts+scores.quality+scores.problemSolving;
+ evidence.teacherRubric={...scores,total,passing:total>=80,feedback:b.feedback,gradedBy:user.id,gradedAt:new Date().toISOString()};
+ await env.DB.prepare("UPDATE attempts SET evidence=? WHERE id=?").bind(JSON.stringify(evidence),gradeMatch[1]).run();
+ return reply({ok:true,grade:evidence.teacherRubric});
 }
 const deleteAttempt=path.match(/^\/api\/attempts\/([a-f0-9-]{36})\/delete$/i);
 if(deleteAttempt&&request.method==="POST"){
