@@ -3,7 +3,7 @@ const bytes=s=>new TextEncoder().encode(s);
 const hex=b=>Array.from(new Uint8Array(b),x=>x.toString(16).padStart(2,"0")).join("");
 const random=()=>crypto.randomUUID();
 async function digest(s){return hex(await crypto.subtle.digest("SHA-256",bytes(s)));}
-async function hashPassword(password,salt){const key=await crypto.subtle.importKey("raw",bytes(password),"PBKDF2",false,["deriveBits"]);return hex(await crypto.subtle.deriveBits({name:"PBKDF2",salt:bytes(salt),iterations:210000,hash:"SHA-256"},key,256));}
+async function hashPassword(password,salt){const key=await crypto.subtle.importKey("raw",bytes(password),"PBKDF2",false,["deriveBits"]);return hex(await crypto.subtle.deriveBits({name:"PBKDF2",salt:bytes(salt),iterations:100000,hash:"SHA-256"},key,256));}
 async function verify(password,user){return (await hashPassword(password,user.salt))===user.password_hash;}
 async function parse(request){try{return await request.json()}catch{return {}}}
 const validName=s=>typeof s==="string"&&/^[a-zA-Z0-9_-]{3,32}$/.test(s);
