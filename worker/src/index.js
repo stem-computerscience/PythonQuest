@@ -47,7 +47,7 @@ if(attemptsMatch&&request.method==="GET"){
 if(path==="/api/teacher/flagged-attempts"&&request.method==="GET"){
  if(user.role!=="teacher")return reply({error:"Teacher only"},403);
  const rows=await env.DB.prepare("SELECT attempts.id,attempts.user_id,users.username,attempts.mission,attempts.mode,attempts.success,attempts.evidence,attempts.created_at FROM attempts JOIN users ON users.id=attempts.user_id WHERE users.role='student' ORDER BY attempts.created_at DESC LIMIT 300").all();
- const flagged=rows.results.filter(a=>{let e={};try{e=JSON.parse(a.evidence||"{}")}catch{}return !e.serverVerified&&(a.success===0||e.rubric?.total<80||e.teacherRubric?.total<80);}).slice(0,100).map(a=>({id:a.id,username:a.username,mission:a.mission,mode:a.mode,created_at:a.created_at,reason:"Unverified or below 80%"}));
+ const flagged=rows.results.filter(a=>{let e={};try{e=JSON.parse(a.evidence||"{}")}catch{}return a.success===0;}).slice(0,100).map(a=>({id:a.id,username:a.username,mission:a.mission,mode:a.mode,created_at:a.created_at,reason:"Practice attempt needs help"}));
  return reply({flagged});
 }
 const submitBoss=path.match(/^\/api\/attempts\/([a-f0-9-]{36})\/submit-boss$/i);
@@ -97,7 +97,7 @@ if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")ret
  if(requestedMission!==previousMission+1)return reply({error:"Complete one mission at a time."},403);
  const records=await env.DB.prepare("SELECT success,evidence FROM attempts WHERE user_id=? AND mission=?").bind(user.id,previousMission).all();
  const boss=previousMission%4===0;
- const allowed=records.results.some(row=>{let e={};try{e=JSON.parse(row.evidence||"{}")}catch{}return boss?((!!e.submittedBossAt&&(row.success===1||e.clubAcknowledgment?.complete===true))||(e.teacherApproval?.approved===true&&e.teacherRubric?.total>=80)):row.success===1;});
+ const allowed=records.results.some(row=>{let e={};try{e=JSON.parse(row.evidence||"{}")}catch{}return boss?((!!e.submittedBossAt&&(row.success===1||e.clubAcknowledgment?.complete===true))||(e.teacherApproval?.approved===true)):row.success===1;});
  if(!allowed)return reply({error:boss?"Complete the boss project through practice checks or advisor acknowledgment.":"Complete the practice challenge before advancing."},403);
 }const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:requestedMission,xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid",skills:Array.isArray(previous.skills)?previous.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(1,Math.min(2,Number(previous.releasedRegion)||Math.ceil((Number(previous.mission)||1)/4)))};if(progress.mission>progress.releasedRegion*4)return reply({error:"This region has not been released by your teacher"},403);await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
 if(path==="/api/skills/complete"&&request.method==="POST"){
