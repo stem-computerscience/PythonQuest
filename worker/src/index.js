@@ -127,7 +127,7 @@ if(path==="/api/club/badges/catalog"&&request.method==="POST"){
  const defs=await badgeCatalog(env);if(defs.length>=40)return reply({error:"Badge catalog full"},400);
  const badge={id:"custom:"+random(),name:b.name.trim(),description:b.description.trim(),icon:b.icon,createdAt:new Date().toISOString()};
  defs.push(badge);
- await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data").bind("club:badge-catalog",JSON.stringify(defs)).run();
+ await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data").bind(user.id,JSON.stringify({clubBadgeCatalog:defs})).run();
  return reply({badge},201);
 }
 
