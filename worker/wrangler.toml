@@ -8,4 +8,4 @@ ALLOWED_ORIGIN = "https://stem-computerscience.github.io"
 [[d1_databases]]
 binding = "DB"
 database_name = "pythonquest"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "4c1c0b1f-601b-4461-b46e-d6a2a007b57c"
