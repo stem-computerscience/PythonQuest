@@ -50,6 +50,18 @@ if(path==="/api/teacher/flagged-attempts"&&request.method==="GET"){
  const flagged=rows.results.filter(a=>{let e={};try{e=JSON.parse(a.evidence||"{}")}catch{}return !e.serverVerified&&(a.success===0||e.rubric?.total<80||e.teacherRubric?.total<80);}).slice(0,100).map(a=>({id:a.id,username:a.username,mission:a.mission,mode:a.mode,created_at:a.created_at,reason:"Unverified or below 80%"}));
  return reply({flagged});
 }
+if(path==="/api/boss/submissions"&&request.method==="GET"){
+ if(user.role!=="teacher")return reply({error:"Teacher only"},403);
+ const rows=await env.DB.prepare("SELECT a.id,a.user_id,u.username,a.mission,a.world,a.mode,a.code,a.output,a.success,a.evidence,a.created_at FROM attempts a JOIN users u ON u.id=a.user_id WHERE a.mission IN (4) AND u.role='student' ORDER BY a.created_at DESC,a.id DESC LIMIT 200").all();
+ const submissions=rows.results.map(row=>{let evidence={};try{evidence=JSON.parse(row.evidence||"{}")}catch{}return {...row,success:!!row.success,evidence,status:evidence.teacherApproval?.approved?"approved":evidence.teacherRubric?"graded":"pending"};});
+ return reply({submissions});
+}
+if(path==="/api/boss/feedback"&&request.method==="GET"){
+ if(user.role!=="student")return reply({error:"Student only"},403);
+ const rows=await env.DB.prepare("SELECT mission,evidence,created_at FROM attempts WHERE user_id=? AND mission IN (4) ORDER BY created_at DESC,id DESC LIMIT 100").bind(user.id).all();
+ const feedback=rows.results.flatMap(row=>{let e={};try{e=JSON.parse(row.evidence||"{}")}catch{}return e.teacherRubric?[{mission:row.mission,created_at:row.created_at,rubric:e.teacherRubric,approved:e.teacherApproval?.approved===true,approvalReason:e.teacherApproval?.reason||null}]:[];});
+ return reply({feedback});
+}
 const bestMatch=path.match(/^\/api\/students\/([a-f0-9-]{36})\/best-grades$/i);
 if(bestMatch&&request.method==="GET"){
  if(user.role!=="teacher")return reply({error:"Teacher only"},403);
