@@ -132,10 +132,42 @@ if(path==="/api/club/badges/catalog"&&request.method==="POST"){
  return reply({badge},201);
 }
 
+const saveBadgeCatalog=async defs=>{const row=await env.DB.prepare("SELECT u.id,s.data FROM users u LEFT JOIN saves s ON s.user_id=u.id WHERE u.role='teacher' ORDER BY u.id LIMIT 1").first();if(!row)return false;let p={};try{p=JSON.parse(row.data||"{}")}catch{}p.clubBadgeCatalog=defs;await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(row.id,JSON.stringify(p)).run();return true;};
+if(path==="/api/club/badges/catalog/manage"&&request.method==="POST"){
+ if(user.role!=="teacher")return reply({error:"Advisor only"},403);
+ const b=await parse(request),defs=await badgeCatalog(env);
+ const index=defs.findIndex(x=>x.id===b.id);
+ if(index<0)return reply({error:"Badge not found"},404);
+ if(b.action==="edit"){
+  if(defs[index].archived)return reply({error:"Archived badges cannot be edited"},409);
+  if(typeof b.name!=="string"||b.name.trim().length<3||b.name.trim().length>48||typeof b.description!=="string"||b.description.length>180||!["star","rocket","shield","lightbulb","trophy","heart","code"].includes(b.icon))return reply({error:"Invalid badge details"},400);
+  defs[index]={...defs[index],name:b.name.trim(),description:b.description.trim(),icon:b.icon,updatedAt:new Date().toISOString()};
+ }else if(b.action==="archive"){defs[index]={...defs[index],archived:true,archivedAt:new Date().toISOString()};}
+ else return reply({error:"Invalid action"},400);
+ if(!await saveBadgeCatalog(defs))return reply({error:"No advisor account"},409);
+ return reply({badge:defs[index]});
+}
+if(path==="/api/club/badges/bulk-award"&&request.method==="POST"){
+ if(user.role!=="teacher")return reply({error:"Advisor only"},403);
+ const b=await parse(request),defs=await badgeCatalog(env);
+ if(!validBadgeId(b.badge,defs)||defs.some(d=>d.id===b.badge&&d.archived))return reply({error:"Badge unavailable"},400);
+ if(!Array.isArray(b.studentIds)||b.studentIds.length<1||b.studentIds.length>100||new Set(b.studentIds).size!==b.studentIds.length||b.studentIds.some(id=>typeof id!=="string"))return reply({error:"Select 1–100 distinct students"},400);
+ const outcomes=[];
+ for(const id of b.studentIds){
+  const row=await env.DB.prepare("SELECT s.data FROM saves s JOIN users u ON u.id=s.user_id WHERE u.id=? AND u.role='student'").bind(id).first();
+  if(!row){outcomes.push({id,ok:false});continue;}
+  let p={};try{p=JSON.parse(row.data||"{}")}catch{}
+  p.clubAwards=Array.isArray(p.clubAwards)?p.clubAwards:[];
+  if(!p.clubAwards.includes(b.badge)){p.clubAwards.push(b.badge);p.clubAwardDates={...(p.clubAwardDates||{}),[b.badge]:new Date().toISOString()};appendBadgeEvent(p,{action:"awarded",badge:b.badge,advisor:user.id});}
+  await env.DB.prepare("UPDATE saves SET data=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?").bind(JSON.stringify(p),id).run();
+  outcomes.push({id,ok:true});
+ }
+ return reply({outcomes});
+}
 if(path==="/api/club/badges/award"&&request.method==="POST"){
  if(user.role!=="teacher")return reply({error:"Advisor only"},403);
  const b=await parse(request);
- if(typeof b.studentId!=="string"||!validBadgeId(b.badge,await badgeCatalog(env)))return reply({error:"Invalid award"},400);
+ if(typeof b.studentId!=="string"||!validBadgeId(b.badge,await badgeCatalog(env))||(await badgeCatalog(env)).some(d=>d.id===b.badge&&d.archived))return reply({error:"Invalid award"},400);
  const row=await env.DB.prepare("SELECT s.data FROM saves s JOIN users u ON u.id=s.user_id WHERE u.id=? AND u.role='student'").bind(b.studentId).first();
  if(!row)return reply({error:"Student not found"},404);
  let p={};try{p=JSON.parse(row.data||"{}")}catch{}
