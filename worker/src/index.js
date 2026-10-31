@@ -19,15 +19,6 @@ if(path==="/api/login"&&request.method==="POST"){const b=await parse(request);co
 const user=await auth(request,env);if(!user)return reply({error:"Unauthorized"},401);
 if(path==="/api/logout"&&request.method==="POST"){const token=request.headers.get("authorization").slice(7);await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?").bind(await digest(token)).run();return reply({ok:true});}
 if(path==="/api/me"&&request.method==="GET")return reply({user});
-function provisionalRubric(b){
- const code=b.code,output=b.output.trim(),expected=["Hello, Python!","Ada","20","Access granted","0\\n1\\n2","2"][b.mission-1];
- const patterns=[/\\bmessage\\s*=/,/\\bexplorer\\s*=/,/\\benergy\\s*=.*\\+/,/\\bif\\b[\\s\\S]*>=/,/\\bfor\\b[\\s\\S]*\\brange\\s*\\(/,/\\binventory\\s*=\\s*\\[[\\s\\S]*\\blen\\s*\\(/];
- const correctness=b.mode==="terminal"&&b.success&&output===expected?40:0;
- const concepts=b.mode==="terminal"&&patterns[b.mission-1].test(code)&&b.evidence?.conceptOk===true&&b.evidence?.valueOk===true?30:0;
- const quality=code.trim()&&!code.split("\\n").some(x=>x.length>120)?20:0;
- const problemSolving=b.success?10:0;
- return {correctness,concepts,quality,problemSolving,total:correctness+concepts+quality+problemSolving,verified:false,passing:false};
-}
 if(path==="/api/attempts"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
  const b=await parse(request);
