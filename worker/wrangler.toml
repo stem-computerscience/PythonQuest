@@ -3,7 +3,7 @@ main = "src/index.js"
 compatibility_date = "2026-10-01"
 
 [vars]
-ALLOWED_ORIGIN = "https://stem-computerscience.github.io"
+ALLOWED_ORIGIN = "https://stem-computerscience.github.io,https://ravenracing.net,https://www.ravenracing.net"
 
 [[d1_databases]]
 binding = "DB"
