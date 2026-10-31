@@ -19,6 +19,28 @@ if(path==="/api/login"&&request.method==="POST"){const b=await parse(request);co
 const user=await auth(request,env);if(!user)return reply({error:"Unauthorized"},401);
 if(path==="/api/logout"&&request.method==="POST"){const token=request.headers.get("authorization").slice(7);await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?").bind(await digest(token)).run();return reply({ok:true});}
 if(path==="/api/me"&&request.method==="GET")return reply({user});
+if(path==="/api/attempts"&&request.method==="POST"){
+ if(user.role!=="student")return reply({error:"Student only"},403);
+ const b=await parse(request);
+ if(typeof b.code!=="string"||b.code.length>12000||!["space","dungeon"].includes(b.world)||!["hybrid","code","terminal"].includes(b.mode)||!Number.isInteger(b.mission)||b.mission<1||b.mission>6||typeof b.output!=="string"||b.output.length>4000||typeof b.success!=="boolean")return reply({error:"Invalid attempt"},400);
+ const id=random(),evidence=b.evidence&&typeof b.evidence==="object"?{conceptOk:b.evidence.conceptOk===true,valueOk:b.evidence.valueOk===true}:null;
+ await env.DB.prepare("INSERT INTO attempts(id,user_id,mission,world,mode,code,output,success,evidence) VALUES(?,?,?,?,?,?,?,?,?)").bind(id,user.id,b.mission,b.world,b.mode,b.code,b.output,b.success?1:0,JSON.stringify(evidence)).run();
+ return reply({ok:true,id},201);
+}
+const attemptsMatch=path.match(/^\/api\/students\/([a-f0-9-]{36})\/attempts$/i);
+if(attemptsMatch&&request.method==="GET"){
+ if(user.role!=="teacher")return reply({error:"Teacher only"},403);
+ const student=await env.DB.prepare("SELECT id,username FROM users WHERE id=? AND role='student'").bind(attemptsMatch[1]).first();
+ if(!student)return reply({error:"Student not found"},404);
+ const rows=await env.DB.prepare("SELECT id,mission,world,mode,code,output,success,evidence,created_at FROM attempts WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 100").bind(student.id).all();
+ return reply({student:student.username,attempts:rows.results.map(x=>({...x,success:!!x.success,evidence:JSON.parse(x.evidence||"null")}))});
+}
+const deleteAttempt=path.match(/^\/api\/attempts\/([a-f0-9-]{36})\/delete$/i);
+if(deleteAttempt&&request.method==="POST"){
+ if(user.role!=="teacher")return reply({error:"Teacher only"},403);
+ const result=await env.DB.prepare("DELETE FROM attempts WHERE id=?").bind(deleteAttempt[1]).run();
+ return reply({ok:true,deleted:result.meta?.changes||0});
+}
 if(path==="/api/progress"&&request.method==="GET"){const row=await env.DB.prepare("SELECT data,updated_at FROM saves WHERE user_id=?").bind(user.id).first();return reply({progress:row?JSON.parse(row.data):null,updated_at:row?.updated_at||null});}
 if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")return reply({error:"Student only"},403);const b=await parse(request);if(!b||typeof b!=="object"||Array.isArray(b)||JSON.stringify(b).length>16000)return reply({error:"Invalid progress"},400);const existing=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();let previous={};try{previous=existing?JSON.parse(existing.data):{}}catch{}const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:Math.max(1,Math.min(6,Number(b.mission)||1)),xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid",skills:Array.isArray(previous.skills)?previous.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(1,Math.min(2,Number(previous.releasedRegion)||Math.ceil((Number(previous.mission)||1)/4)))};if(progress.mission>progress.releasedRegion*4)return reply({error:"This region has not been released by your teacher"},403);await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
 if(path==="/api/skills/complete"&&request.method==="POST"){
