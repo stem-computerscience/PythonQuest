@@ -197,7 +197,7 @@ if(path==="/api/skills/complete"&&request.method==="POST"){
  const saved=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();
  let old={};try{old=saved?JSON.parse(saved.data):{}}catch{}
  const skills=[...new Set([...(Array.isArray(old.skills)?old.skills:[]),skill])].filter(x=>Number.isInteger(x)&&x>=1&&x<=6).sort((a,b)=>a-b);
- const progress={...old,world:old.world==="dungeon"?"dungeon":"space",mission:Math.max(1,Math.min(6,Number(old.mission)||1)),xp:Math.max(0,Math.min(100000,Number(old.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(old.defaultMode)?old.defaultMode:"hybrid",skills,releasedRegion:Math.max(1,Math.min(2,Number(old.releasedRegion)||Math.ceil((Number(old.mission)||1)/4)))};
+ const progress={...old,world:old.world==="dungeon"?"dungeon":"space",mission:Math.max(1,Math.min(6,Number(old.mission)||1)),xp:Math.max(0,Math.min(100000,Number(old.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(old.defaultMode)?old.defaultMode:"hybrid",skills,releasedRegion:Math.max(1,Math.min(2,Number(old.releasedRegion)||Math.ceil((Number(old.mission)||1)/4)))};stampBadges(progress,old);
  await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();
  return reply({ok:true,skills});
 }
