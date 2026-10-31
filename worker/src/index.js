@@ -24,6 +24,18 @@ if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")ret
 if(user.role!=="teacher")return reply({error:"Teacher only"},403);
 if(path==="/api/students"&&request.method==="GET"){const rows=await env.DB.prepare("SELECT users.id,users.username,users.active,saves.data,saves.updated_at FROM users LEFT JOIN saves ON saves.user_id=users.id WHERE users.role='student' ORDER BY users.username").all();return reply({students:rows.results.map(x=>({id:x.id,username:x.username,active:!!x.active,progress:x.data?JSON.parse(x.data):null,updated_at:x.updated_at}))});}
 if(path==="/api/students"&&request.method==="POST"){const b=await parse(request);if(!validName(b.username)||!validPass(b.password))return reply({error:"Invalid username or password"},400);return reply(await createUser(env,b.username,b.password,"student"),201);}
+const placement=path.match(/^\/api\/students\/([a-f0-9-]{36})\/starting-chapter$/i);
+if(placement&&request.method==="POST"){
+ const b=await parse(request),mission=Number(b.mission);
+ if(!Number.isInteger(mission)||mission<1||mission>6||typeof b.resetXp!=="boolean")return reply({error:"Choose a chapter from 1 to 6 and specify whether to reset XP"},400);
+ const student=await env.DB.prepare("SELECT id FROM users WHERE id=? AND role='student'").bind(placement[1]).first();
+ if(!student)return reply({error:"Student not found"},404);
+ const saved=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(student.id).first();
+ let old={};try{old=saved?JSON.parse(saved.data):{}}catch{}
+ const progress={world:old.world==="dungeon"?"dungeon":"space",mission,xp:b.resetXp?0:Math.max(0,Math.min(100000,Number(old.xp)||0))};
+ await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(student.id,JSON.stringify(progress)).run();
+ return reply({ok:true,progress});
+}
 const match=path.match(/^\/api\/students\/([a-f0-9-]{36})\/(password|active)$/i);if(match&&request.method==="POST"){const b=await parse(request);if(match[2]==="password"){if(!validPass(b.password))return reply({error:"Password must be at least 12 characters"},400);const salt=random();await env.DB.prepare("UPDATE users SET password_hash=?,salt=? WHERE id=? AND role='student'").bind(await hashPassword(b.password,salt),salt,match[1]).run();}else{if(typeof b.active!=="boolean")return reply({error:"Invalid active state"},400);await env.DB.prepare("UPDATE users SET active=? WHERE id=? AND role='student'").bind(b.active?1:0,match[1]).run();}await env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(match[1]).run();return reply({ok:true});}
 return reply({error:"Not found"},404);
 }catch(e){console.error("PythonQuest API error",{stage,errorName:e?.name||"Error",errorMessage:String(e?.message||"Unknown error").slice(0,500)});return reply({error:"Request failed"},500);}}};
