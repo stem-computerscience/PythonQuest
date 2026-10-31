@@ -127,8 +127,7 @@ if(path==="/api/club/badges/catalog"&&request.method==="POST"){
  const defs=await badgeCatalog(env);if(defs.length>=40)return reply({error:"Badge catalog full"},400);
  const badge={id:"custom:"+random(),name:b.name.trim(),description:b.description.trim(),icon:b.icon,createdAt:new Date().toISOString()};
  defs.push(badge);
- const saved=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();let settings={};try{settings=JSON.parse(saved?.data||"{}")}catch{}settings.clubBadgeCatalog=defs;
- await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data").bind(user.id,JSON.stringify(settings)).run();
+ if(!await saveBadgeCatalog(defs))return reply({error:"No advisor account"},409);
  return reply({badge},201);
 }
 
