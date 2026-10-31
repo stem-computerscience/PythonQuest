@@ -32,8 +32,8 @@ if(path==="/api/attempts"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
  const b=await parse(request);
  if(typeof b.code!=="string"||b.code.length>12000||!["space","dungeon"].includes(b.world)||!["hybrid","code","terminal"].includes(b.mode)||!Number.isInteger(b.mission)||b.mission<1||b.mission>6||typeof b.output!=="string"||b.output.length>4000||typeof b.success!=="boolean")return reply({error:"Invalid attempt"},400);
- const rubric=provisionalRubric(b);const id=random(),evidence=b.evidence&&typeof b.evidence==="object"?{conceptOk:b.evidence.conceptOk===true,valueOk:b.evidence.valueOk===true}:null;
- await env.DB.prepare("INSERT INTO attempts(id,user_id,mission,world,mode,code,output,success,evidence) VALUES(?,?,?,?,?,?,?,?,?)").bind(id,user.id,b.mission,b.world,b.mode,b.code,b.output,b.success?1:0,JSON.stringify({...evidence,rubric})).run();
+ const id=random(),evidence=b.evidence&&typeof b.evidence==="object"?{conceptOk:b.evidence.conceptOk===true,valueOk:b.evidence.valueOk===true}:null;
+ await env.DB.prepare("INSERT INTO attempts(id,user_id,mission,world,mode,code,output,success,evidence) VALUES(?,?,?,?,?,?,?,?,?)").bind(id,user.id,b.mission,b.world,b.mode,b.code,b.output,b.success?1:0,JSON.stringify({...evidence})).run();
  return reply({ok:true,id},201);
 }
 const attemptsMatch=path.match(/^\/api\/students\/([a-f0-9-]{36})\/attempts$/i);
@@ -64,46 +64,27 @@ if(submitBoss&&request.method==="POST"){
 if(path==="/api/boss/submissions"&&request.method==="GET"){
  if(user.role!=="teacher")return reply({error:"Teacher only"},403);
  const rows=await env.DB.prepare("SELECT a.id,a.user_id,u.username,a.mission,a.world,a.mode,a.code,a.output,a.success,a.evidence,a.created_at FROM attempts a JOIN users u ON u.id=a.user_id WHERE a.mission IN (4) AND u.role='student' ORDER BY a.created_at DESC,a.id DESC LIMIT 200").all();
- const submissions=rows.results.map(row=>{let evidence={};try{evidence=JSON.parse(row.evidence||"{}")}catch{}return {...row,success:!!row.success,evidence,status:evidence.teacherApproval?.approved?"approved":evidence.teacherRubric?"graded":evidence.submittedBossAt?"pending":"draft"};});
- const submitted=submissions.filter(s=>s.status!=="draft");return reply({submissions:submitted,pendingCount:submitted.filter(s=>s.status==="pending").length});
+ const submissions=rows.results.map(row=>{let evidence={};try{evidence=JSON.parse(row.evidence||"{}")}catch{}return {...row,success:!!row.success,evidence,status:evidence.clubAcknowledgment?.complete||evidence.teacherApproval?.approved?"complete":evidence.submittedBossAt?(row.success?"practice-complete":"needs-help"):"draft"};});
+ const submitted=submissions.filter(s=>s.status!=="draft");return reply({submissions:submitted,pendingCount:submitted.filter(s=>s.status==="needs-help").length});
 }
 if(path==="/api/boss/feedback"&&request.method==="GET"){
  if(user.role!=="student")return reply({error:"Student only"},403);
- const rows=await env.DB.prepare("SELECT mission,evidence,created_at FROM attempts WHERE user_id=? AND mission IN (4) ORDER BY created_at DESC,id DESC LIMIT 100").bind(user.id).all();
- const feedback=rows.results.flatMap(row=>{let e={};try{e=JSON.parse(row.evidence||"{}")}catch{}return e.teacherRubric?[{mission:row.mission,created_at:row.created_at,rubric:e.teacherRubric,approved:e.teacherApproval?.approved===true,approvalReason:e.teacherApproval?.reason||null}]:[];});
- return reply({feedback});
+ const rows=await env.DB.prepare("SELECT mission,success,evidence,created_at FROM attempts WHERE user_id=? AND mission=4 ORDER BY created_at DESC,id DESC LIMIT 100").bind(user.id).all();
+ const projects=rows.results.flatMap(row=>{let e={};try{e=JSON.parse(row.evidence||"{}")}catch{}return e.submittedBossAt?[{mission:row.mission,created_at:row.created_at,complete:!!row.success||e.clubAcknowledgment?.complete===true||e.teacherApproval?.approved===true,advisorNote:e.clubAcknowledgment?.note||"",submittedAt:e.submittedBossAt}]:[];});
+ return reply({projects});
 }
-const bestMatch=path.match(/^\/api\/students\/([a-f0-9-]{36})\/best-grades$/i);
-if(bestMatch&&request.method==="GET"){
- if(user.role!=="teacher")return reply({error:"Teacher only"},403);
- const rows=await env.DB.prepare("SELECT mission,evidence FROM attempts WHERE user_id=?").bind(bestMatch[1]).all();
- const best={};for(const row of rows.results){let grade;try{grade=JSON.parse(row.evidence||"{}").teacherRubric}catch{}if(grade&&Number.isInteger(grade.total)&&(best[row.mission]===undefined||grade.total>best[row.mission]))best[row.mission]=grade.total;}
- return reply({bestGrades:best});
-}
-if(path==="/api/sandbox/status"&&request.method==="GET")return reply({configured:!!env.SANDBOX_URL,available:false,message:"Trusted Python execution requires an isolated sandbox deployment. Browser output is not accepted as verification."});
-const approvalMatch=path.match(/^\/api\/attempts\/([a-f0-9-]{36})\/approve$/i);
-if(approvalMatch&&request.method==="POST"){
- if(user.role!=="teacher")return reply({error:"Teacher only"},403);
+const acknowledgeMatch=path.match(/^\/api\/attempts\/([a-f0-9-]{36})\/acknowledge$/i);
+if(acknowledgeMatch&&request.method==="POST"){
+ if(user.role!=="teacher")return reply({error:"Advisor only"},403);
  const b=await parse(request);
- if(typeof b.reason!=="string"||b.reason.trim().length<10||b.reason.length>2000)return reply({error:"A reason of at least 10 characters is required"},400);
- const record=await env.DB.prepare("SELECT evidence FROM attempts WHERE id=?").bind(approvalMatch[1]).first();
- if(!record)return reply({error:"Attempt not found"},404);
+ if(typeof b.note!=="string"||b.note.length>2000)return reply({error:"Invalid note"},400);
+ const record=await env.DB.prepare("SELECT mission,evidence FROM attempts WHERE id=?").bind(acknowledgeMatch[1]).first();
+ if(!record||record.mission!==4)return reply({error:"Boss project not found"},404);
  let evidence={};try{evidence=JSON.parse(record.evidence||"{}")}catch{}
- if(!evidence.teacherRubric||evidence.teacherRubric.total<80)return reply({error:"Teacher must grade this attempt at least 80 before approving progression"},400);
- evidence.teacherApproval={approved:true,reason:b.reason.trim(),teacherId:user.id,approvedAt:new Date().toISOString()};
- await env.DB.prepare("UPDATE attempts SET evidence=? WHERE id=?").bind(JSON.stringify(evidence),approvalMatch[1]).run();
- return reply({ok:true,approval:evidence.teacherApproval});
-}
-const gradeMatch=path.match(/^\/api\/attempts\/([a-f0-9-]{36})\/grade$/i);
-if(gradeMatch&&request.method==="POST"){
- if(user.role!=="teacher")return reply({error:"Teacher only"},403);
- const b=await parse(request),scores=b.scores;
- if(!scores||!["correctness","concepts","quality","problemSolving"].every((k,i)=>Number.isInteger(scores[k])&&scores[k]>=0&&scores[k]<=[40,30,20,10][i])||typeof b.feedback!=="string"||b.feedback.length>2000)return reply({error:"Invalid rubric scores or feedback"},400);
- const record=await env.DB.prepare("SELECT evidence FROM attempts WHERE id=?").bind(gradeMatch[1]).first();if(!record)return reply({error:"Attempt not found"},404);
- const evidence=JSON.parse(record.evidence||"{}");const total=scores.correctness+scores.concepts+scores.quality+scores.problemSolving;
- evidence.teacherRubric={...scores,total,passing:total>=80,feedback:b.feedback,gradedBy:user.id,gradedAt:new Date().toISOString()};
- await env.DB.prepare("UPDATE attempts SET evidence=? WHERE id=?").bind(JSON.stringify(evidence),gradeMatch[1]).run();
- return reply({ok:true,grade:evidence.teacherRubric});
+ if(!evidence.submittedBossAt)return reply({error:"Project has not been submitted"},400);
+ evidence.clubAcknowledgment={complete:true,note:b.note.trim(),advisorId:user.id,at:new Date().toISOString()};
+ await env.DB.prepare("UPDATE attempts SET evidence=? WHERE id=?").bind(JSON.stringify(evidence),acknowledgeMatch[1]).run();
+ return reply({ok:true,acknowledgment:evidence.clubAcknowledgment});
 }
 const deleteAttempt=path.match(/^\/api\/attempts\/([a-f0-9-]{36})\/delete$/i);
 if(deleteAttempt&&request.method==="POST"){
@@ -116,8 +97,8 @@ if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")ret
  if(requestedMission!==previousMission+1)return reply({error:"Complete one mission at a time."},403);
  const records=await env.DB.prepare("SELECT success,evidence FROM attempts WHERE user_id=? AND mission=?").bind(user.id,previousMission).all();
  const boss=previousMission%4===0;
- const allowed=records.results.some(row=>{let e={};try{e=JSON.parse(row.evidence||"{}")}catch{}return boss?(e.teacherApproval?.approved===true&&e.teacherRubric?.total>=80):row.success===1;});
- if(!allowed)return reply({error:boss?"Boss challenge requires teacher grading of at least 80% and approval.":"Complete the practice challenge before advancing."},403);
+ const allowed=records.results.some(row=>{let e={};try{e=JSON.parse(row.evidence||"{}")}catch{}return boss?((!!e.submittedBossAt&&(row.success===1||e.clubAcknowledgment?.complete===true))||(e.teacherApproval?.approved===true&&e.teacherRubric?.total>=80)):row.success===1;});
+ if(!allowed)return reply({error:boss?"Complete the boss project through practice checks or advisor acknowledgment.":"Complete the practice challenge before advancing."},403);
 }const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:requestedMission,xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid",skills:Array.isArray(previous.skills)?previous.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(1,Math.min(2,Number(previous.releasedRegion)||Math.ceil((Number(previous.mission)||1)/4)))};if(progress.mission>progress.releasedRegion*4)return reply({error:"This region has not been released by your teacher"},403);await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
 if(path==="/api/skills/complete"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
