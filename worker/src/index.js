@@ -126,6 +126,17 @@ if(path==="/api/club/badges/award"&&request.method==="POST"){
  await env.DB.prepare("UPDATE saves SET data=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?").bind(JSON.stringify(p),b.studentId).run();
  return reply({ok:true,awards:p.clubAwards});
 }
+if(path==="/api/club/badges/remove"&&request.method==="POST"){
+ if(user.role!=="teacher")return reply({error:"Advisor only"},403);
+ const b=await parse(request);
+ if(!CLUB_AWARD_IDS.includes(b.badge)||typeof b.studentId!=="string")return reply({error:"Invalid request"},400);
+ const row=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(b.studentId).first();
+ if(!row)return reply({error:"No saved student"},404);
+ let p={};try{p=JSON.parse(row.data)}catch{}
+ p.clubAwards=(p.clubAwards||[]).filter(x=>x!==b.badge);
+ await env.DB.prepare("UPDATE saves SET data=? WHERE user_id=?").bind(JSON.stringify(p),b.studentId).run();
+ return reply({ok:true});
+}
 if(path==="/api/club/badges"&&request.method==="GET"){
  const rows=await env.DB.prepare("SELECT u.id,u.username,s.data FROM users u JOIN saves s ON s.user_id=u.id WHERE u.role='student' AND u.active=1").all();
  const members=rows.results.map(row=>{let p={};try{p=JSON.parse(row.data||"{}")}catch{}return {id:row.id,name:p.leaderboardOptIn===true&&safeNickname(p.leaderboardNickname)?p.leaderboardNickname:null,skills:Array.isArray(p.skills)?p.skills:[],chapter:Number(p.mission)||1,awards:Array.isArray(p.clubAwards)?p.clubAwards:[]};}).filter(x=>x.name);
