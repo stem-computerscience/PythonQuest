@@ -44,6 +44,13 @@ if(attemptsMatch&&request.method==="GET"){
  const rows=await env.DB.prepare("SELECT id,mission,world,mode,code,output,success,evidence,created_at FROM attempts WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 100").bind(student.id).all();
  return reply({student:student.username,attempts:rows.results.map(x=>({...x,success:!!x.success,evidence:JSON.parse(x.evidence||"null")}))});
 }
+const bestMatch=path.match(/^\/api\/students\/([a-f0-9-]{36})\/best-grades$/i);
+if(bestMatch&&request.method==="GET"){
+ if(user.role!=="teacher")return reply({error:"Teacher only"},403);
+ const rows=await env.DB.prepare("SELECT mission,evidence FROM attempts WHERE user_id=?").bind(bestMatch[1]).all();
+ const best={};for(const row of rows.results){let grade;try{grade=JSON.parse(row.evidence||"{}").teacherRubric}catch{}if(grade&&Number.isInteger(grade.total)&&(best[row.mission]===undefined||grade.total>best[row.mission]))best[row.mission]=grade.total;}
+ return reply({bestGrades:best});
+}
 const gradeMatch=path.match(/^\/api\/attempts\/([a-f0-9-]{36})\/grade$/i);
 if(gradeMatch&&request.method==="POST"){
  if(user.role!=="teacher")return reply({error:"Teacher only"},403);
