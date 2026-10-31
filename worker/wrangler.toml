@@ -1,0 +1,11 @@
+name = "pythonquest-api"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+ALLOWED_ORIGIN = "https://stem-computerscience.github.io"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pythonquest"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
