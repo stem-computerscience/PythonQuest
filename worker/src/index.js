@@ -22,6 +22,11 @@ if(path==="/api/login"&&request.method==="POST"){const b=await parse(request);co
 const user=await auth(request,env);if(!user)return reply({error:"Unauthorized"},401);
 if(path==="/api/logout"&&request.method==="POST"){const token=request.headers.get("authorization").slice(7);await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?").bind(await digest(token)).run();return reply({ok:true});}
 if(path==="/api/me"&&request.method==="GET")return reply({user});
+if(path==="/api/attempts/recent"&&request.method==="GET"){
+ if(user.role!=="student")return reply({error:"Student only"},403);
+ const rows=await env.DB.prepare("SELECT id,mission,world,mode,code,created_at FROM attempts WHERE user_id=? AND success=1 ORDER BY created_at DESC,id DESC LIMIT 5").bind(user.id).all();
+ return reply({attempts:rows.results});
+}
 if(path==="/api/attempts"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
  const b=await parse(request);
