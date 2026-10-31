@@ -50,11 +50,22 @@ if(path==="/api/teacher/flagged-attempts"&&request.method==="GET"){
  const flagged=rows.results.filter(a=>{let e={};try{e=JSON.parse(a.evidence||"{}")}catch{}return !e.serverVerified&&(a.success===0||e.rubric?.total<80||e.teacherRubric?.total<80);}).slice(0,100).map(a=>({id:a.id,username:a.username,mission:a.mission,mode:a.mode,created_at:a.created_at,reason:"Unverified or below 80%"}));
  return reply({flagged});
 }
+const submitBoss=path.match(/^\/api\/attempts\/([a-f0-9-]{36})\/submit-boss$/i);
+if(submitBoss&&request.method==="POST"){
+ if(user.role!=="student")return reply({error:"Student only"},403);
+ const row=await env.DB.prepare("SELECT id,mission,evidence FROM attempts WHERE id=? AND user_id=?").bind(submitBoss[1],user.id).first();
+ if(!row||row.mission!==4)return reply({error:"Boss attempt not found"},404);
+ let evidence={};try{evidence=JSON.parse(row.evidence||"{}")}catch{}
+ if(evidence.submittedBossAt)return reply({ok:true,alreadySubmitted:true});
+ evidence.submittedBossAt=new Date().toISOString();
+ await env.DB.prepare("UPDATE attempts SET evidence=? WHERE id=? AND user_id=?").bind(JSON.stringify(evidence),row.id,user.id).run();
+ return reply({ok:true});
+}
 if(path==="/api/boss/submissions"&&request.method==="GET"){
  if(user.role!=="teacher")return reply({error:"Teacher only"},403);
  const rows=await env.DB.prepare("SELECT a.id,a.user_id,u.username,a.mission,a.world,a.mode,a.code,a.output,a.success,a.evidence,a.created_at FROM attempts a JOIN users u ON u.id=a.user_id WHERE a.mission IN (4) AND u.role='student' ORDER BY a.created_at DESC,a.id DESC LIMIT 200").all();
- const submissions=rows.results.map(row=>{let evidence={};try{evidence=JSON.parse(row.evidence||"{}")}catch{}return {...row,success:!!row.success,evidence,status:evidence.teacherApproval?.approved?"approved":evidence.teacherRubric?"graded":"pending"};});
- return reply({submissions});
+ const submissions=rows.results.map(row=>{let evidence={};try{evidence=JSON.parse(row.evidence||"{}")}catch{}return {...row,success:!!row.success,evidence,status:evidence.teacherApproval?.approved?"approved":evidence.teacherRubric?"graded":evidence.submittedBossAt?"pending":"draft"};});
+ const submitted=submissions.filter(s=>s.status!=="draft");return reply({submissions:submitted,pendingCount:submitted.filter(s=>s.status==="pending").length});
 }
 if(path==="/api/boss/feedback"&&request.method==="GET"){
  if(user.role!=="student")return reply({error:"Student only"},403);
