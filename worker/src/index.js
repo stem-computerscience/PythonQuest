@@ -113,6 +113,24 @@ if(nicknameReview&&request.method==="POST"){
  await env.DB.prepare("UPDATE saves SET data=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?").bind(JSON.stringify(p),nicknameReview[1]).run();
  return reply({ok:true,approved:b.approve});
 }
+const CLUB_AWARD_IDS=["mentor","teamwork","creativity","debugger"];
+if(path==="/api/club/badges/award"&&request.method==="POST"){
+ if(user.role!=="teacher")return reply({error:"Advisor only"},403);
+ const b=await parse(request);
+ if(typeof b.studentId!=="string"||!CLUB_AWARD_IDS.includes(b.badge))return reply({error:"Invalid award"},400);
+ const row=await env.DB.prepare("SELECT s.data FROM saves s JOIN users u ON u.id=s.user_id WHERE u.id=? AND u.role='student'").bind(b.studentId).first();
+ if(!row)return reply({error:"Student not found"},404);
+ let p={};try{p=JSON.parse(row.data||"{}")}catch{}
+ p.clubAwards=Array.isArray(p.clubAwards)?p.clubAwards.filter(x=>CLUB_AWARD_IDS.includes(x)):[];
+ if(!p.clubAwards.includes(b.badge))p.clubAwards.push(b.badge);
+ await env.DB.prepare("UPDATE saves SET data=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?").bind(JSON.stringify(p),b.studentId).run();
+ return reply({ok:true,awards:p.clubAwards});
+}
+if(path==="/api/club/badges"&&request.method==="GET"){
+ const rows=await env.DB.prepare("SELECT u.id,u.username,s.data FROM users u JOIN saves s ON s.user_id=u.id WHERE u.role='student' AND u.active=1").all();
+ const members=rows.results.map(row=>{let p={};try{p=JSON.parse(row.data||"{}")}catch{}return {id:row.id,name:p.leaderboardOptIn===true&&safeNickname(p.leaderboardNickname)?p.leaderboardNickname:null,skills:Array.isArray(p.skills)?p.skills:[],chapter:Number(p.mission)||1,awards:Array.isArray(p.clubAwards)?p.clubAwards:[]};}).filter(x=>x.name);
+ return reply({members});
+}
 if(path==="/api/leaderboard/opt-in"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
  const body=await parse(request);if(typeof body.optIn!=="boolean")return reply({error:"optIn must be boolean"},400);
@@ -135,7 +153,7 @@ if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")ret
  const boss=previousMission%4===0;
  const allowed=records.results.some(row=>{let e={};try{e=JSON.parse(row.evidence||"{}")}catch{}return boss?((!!e.submittedBossAt&&(row.success===1||e.clubAcknowledgment?.complete===true))||(e.teacherApproval?.approved===true)):row.success===1;});
  if(!allowed)return reply({error:boss?"Complete the boss project through practice checks or advisor acknowledgment.":"Complete the practice challenge before advancing."},403);
-}const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:requestedMission,xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid",skills:Array.isArray(previous.skills)?previous.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(1,Math.min(2,Number(previous.releasedRegion)||Math.ceil((Number(previous.mission)||1)/4))),leaderboardOptIn:previous.leaderboardOptIn===true,leaderboardNickname:previous.leaderboardNickname||null,leaderboardNicknamePending:previous.leaderboardNicknamePending||null};if(progress.mission>progress.releasedRegion*4)return reply({error:"This region has not been released by your teacher"},403);await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
+}const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:requestedMission,xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid",skills:Array.isArray(previous.skills)?previous.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(1,Math.min(2,Number(previous.releasedRegion)||Math.ceil((Number(previous.mission)||1)/4))),leaderboardOptIn:previous.leaderboardOptIn===true,leaderboardNickname:previous.leaderboardNickname||null,leaderboardNicknamePending:previous.leaderboardNicknamePending||null,clubAwards:Array.isArray(previous.clubAwards)?previous.clubAwards:[]};if(progress.mission>progress.releasedRegion*4)return reply({error:"This region has not been released by your teacher"},403);await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
 if(path==="/api/skills/complete"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
  const b=await parse(request),skill=Number(b.skill);
