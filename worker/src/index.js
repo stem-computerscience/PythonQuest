@@ -6,6 +6,9 @@ async function digest(s){return hex(await crypto.subtle.digest("SHA-256",bytes(s
 async function hashPassword(password,salt){const key=await crypto.subtle.importKey("raw",bytes(password),"PBKDF2",false,["deriveBits"]);return hex(await crypto.subtle.deriveBits({name:"PBKDF2",salt:bytes(salt),iterations:100000,hash:"SHA-256"},key,256));}
 async function verify(password,user){return (await hashPassword(password,user.salt))===user.password_hash;}
 async function parse(request){try{return await request.json()}catch{return {}}}
+const badgeKeys=p=>{const keys=[];if((Number(p.mission)||1)>=2)keys.push("first");if((Number(p.mission)||1)>=5)keys.push("boss");for(const n of p.skills||[])if(Number.isInteger(n)&&n>=1&&n<=6)keys.push("skill"+n);return keys;};
+const stampBadges=(p,previous)=>{const old=new Set(badgeKeys(previous||{}));p.badgeDates={...(previous?.badgeDates||{})};const now=new Date().toISOString();for(const key of badgeKeys(p))if(!old.has(key)&&!p.badgeDates[key])p.badgeDates[key]=now;return p;};
+const appendBadgeEvent=(p,event)=>{p.badgeEvents=Array.isArray(p.badgeEvents)?p.badgeEvents:[];p.badgeEvents.push({id:random(),at:new Date().toISOString(),...event});return p;};
 const validName=s=>typeof s==="string"&&/^[a-zA-Z0-9_-]{3,32}$/.test(s);
 const validPass=s=>typeof s==="string"&&s.length>=12&&s.length<=128;
 async function auth(request,env){const token=request.headers.get("authorization")?.match(/^Bearer ([a-f0-9-]{36})$/i)?.[1];if(!token)return null;const h=await digest(token);return env.DB.prepare("SELECT users.id,users.username,users.role FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token_hash=? AND sessions.expires_at>? AND users.active=1").bind(h,Date.now()).first();}
@@ -122,7 +125,7 @@ if(path==="/api/club/badges/award"&&request.method==="POST"){
  if(!row)return reply({error:"Student not found"},404);
  let p={};try{p=JSON.parse(row.data||"{}")}catch{}
  p.clubAwards=Array.isArray(p.clubAwards)?p.clubAwards.filter(x=>CLUB_AWARD_IDS.includes(x)):[];
- if(!p.clubAwards.includes(b.badge)){p.clubAwards.push(b.badge);p.clubAwardDates={...(p.clubAwardDates||{}),[b.badge]:new Date().toISOString()};}
+ if(!p.clubAwards.includes(b.badge)){p.clubAwards.push(b.badge);p.clubAwardDates={...(p.clubAwardDates||{}),[b.badge]:new Date().toISOString()};appendBadgeEvent(p,{action:"awarded",badge:b.badge,advisor:user.id});}
  await env.DB.prepare("UPDATE saves SET data=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?").bind(JSON.stringify(p),b.studentId).run();
  return reply({ok:true,awards:p.clubAwards});
 }
@@ -133,9 +136,31 @@ if(path==="/api/club/badges/remove"&&request.method==="POST"){
  const row=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(b.studentId).first();
  if(!row)return reply({error:"No saved student"},404);
  let p={};try{p=JSON.parse(row.data)}catch{}
- p.clubAwards=(p.clubAwards||[]).filter(x=>x!==b.badge);if(p.clubAwardDates)delete p.clubAwardDates[b.badge];
+ const hadBadge=Array.isArray(p.clubAwards)&&p.clubAwards.includes(b.badge);p.clubAwards=(p.clubAwards||[]).filter(x=>x!==b.badge);if(p.clubAwardDates)delete p.clubAwardDates[b.badge];if(hadBadge)appendBadgeEvent(p,{action:"removed",badge:b.badge,advisor:user.id});
  await env.DB.prepare("UPDATE saves SET data=? WHERE user_id=?").bind(JSON.stringify(p),b.studentId).run();
  return reply({ok:true});
+}
+if(path==="/api/club/achievements"&&request.method==="GET"){
+ if(user.role!=="student")return reply({error:"Student only"},403);
+ const row=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();let p={};try{p=JSON.parse(row?.data||"{}")}catch{}
+ return reply({badges:badgeKeys(p),dates:p.badgeDates||{},special:p.clubAwards||[],specialDates:p.clubAwardDates||{},events:p.badgeEvents||[]});
+}
+if(path==="/api/club/achievements/notifications"&&request.method==="POST"){
+ if(user.role!=="student")return reply({error:"Student only"},403);
+ const row=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();let p={};try{p=JSON.parse(row?.data||"{}")}catch{}
+ const earned=[...badgeKeys(p),...(p.clubAwards||[]).map(x=>"special:"+x)];
+ const seen=new Set(Array.isArray(p.badgeNotified)?p.badgeNotified:[]);
+ const fresh=earned.filter(x=>!seen.has(x));
+ p.badgeNotified=[...new Set([...seen,...earned])];
+ await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data").bind(user.id,JSON.stringify(p)).run();
+ return reply({newBadges:fresh});
+}
+if(path==="/api/club/achievements/history"&&request.method==="GET"){
+ if(user.role!=="teacher")return reply({error:"Advisor only"},403);
+ const rows=await env.DB.prepare("SELECT u.username,s.data FROM users u JOIN saves s ON s.user_id=u.id WHERE u.role='student'").all();
+ const history=rows.results.flatMap(row=>{let p={};try{p=JSON.parse(row.data||"{}")}catch{}return (p.badgeEvents||[]).map(e=>({...e,username:row.username}));});
+ history.sort((a,b)=>String(b.at).localeCompare(String(a.at)));
+ return reply({history:history.slice(0,500)});
 }
 if(path==="/api/club/badges"&&request.method==="GET"){
  const rows=await env.DB.prepare("SELECT u.id,u.username,s.data FROM users u JOIN saves s ON s.user_id=u.id WHERE u.role='student' AND u.active=1").all();
@@ -164,7 +189,7 @@ if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")ret
  const boss=previousMission%4===0;
  const allowed=records.results.some(row=>{let e={};try{e=JSON.parse(row.evidence||"{}")}catch{}return boss?((!!e.submittedBossAt&&(row.success===1||e.clubAcknowledgment?.complete===true))||(e.teacherApproval?.approved===true)):row.success===1;});
  if(!allowed)return reply({error:boss?"Complete the boss project through practice checks or advisor acknowledgment.":"Complete the practice challenge before advancing."},403);
-}const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:requestedMission,xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid",skills:Array.isArray(previous.skills)?previous.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(1,Math.min(2,Number(previous.releasedRegion)||Math.ceil((Number(previous.mission)||1)/4))),leaderboardOptIn:previous.leaderboardOptIn===true,leaderboardNickname:previous.leaderboardNickname||null,leaderboardNicknamePending:previous.leaderboardNicknamePending||null,clubAwards:Array.isArray(previous.clubAwards)?previous.clubAwards:[],clubAwardDates:previous.clubAwardDates||{}};if(progress.mission>progress.releasedRegion*4)return reply({error:"This region has not been released by your teacher"},403);await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
+}const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:requestedMission,xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid",skills:Array.isArray(previous.skills)?previous.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(1,Math.min(2,Number(previous.releasedRegion)||Math.ceil((Number(previous.mission)||1)/4))),leaderboardOptIn:previous.leaderboardOptIn===true,leaderboardNickname:previous.leaderboardNickname||null,leaderboardNicknamePending:previous.leaderboardNicknamePending||null,clubAwards:Array.isArray(previous.clubAwards)?previous.clubAwards:[],clubAwardDates:previous.clubAwardDates||{},badgeDates:previous.badgeDates||{},badgeEvents:previous.badgeEvents||[],badgeNotified:previous.badgeNotified||[]};stampBadges(progress,previous);if(progress.mission>progress.releasedRegion*4)return reply({error:"This region has not been released by your teacher"},403);await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
 if(path==="/api/skills/complete"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
  const b=await parse(request),skill=Number(b.skill);
