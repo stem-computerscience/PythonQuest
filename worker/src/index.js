@@ -20,7 +20,7 @@ const user=await auth(request,env);if(!user)return reply({error:"Unauthorized"},
 if(path==="/api/logout"&&request.method==="POST"){const token=request.headers.get("authorization").slice(7);await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?").bind(await digest(token)).run();return reply({ok:true});}
 if(path==="/api/me"&&request.method==="GET")return reply({user});
 if(path==="/api/progress"&&request.method==="GET"){const row=await env.DB.prepare("SELECT data,updated_at FROM saves WHERE user_id=?").bind(user.id).first();return reply({progress:row?JSON.parse(row.data):null,updated_at:row?.updated_at||null});}
-if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")return reply({error:"Student only"},403);const b=await parse(request);if(!b||typeof b!=="object"||Array.isArray(b)||JSON.stringify(b).length>16000)return reply({error:"Invalid progress"},400);const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:Math.max(1,Math.min(6,Number(b.mission)||1)),xp:Math.max(0,Math.min(100000,Number(b.xp)||0))};await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
+if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")return reply({error:"Student only"},403);const b=await parse(request);if(!b||typeof b!=="object"||Array.isArray(b)||JSON.stringify(b).length>16000)return reply({error:"Invalid progress"},400);const existing=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();let previous={};try{previous=existing?JSON.parse(existing.data):{}}catch{}const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:Math.max(1,Math.min(6,Number(b.mission)||1)),xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid"};await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
 if(user.role!=="teacher")return reply({error:"Teacher only"},403);
 if(path==="/api/students"&&request.method==="GET"){const rows=await env.DB.prepare("SELECT users.id,users.username,users.active,saves.data,saves.updated_at FROM users LEFT JOIN saves ON saves.user_id=users.id WHERE users.role='student' ORDER BY users.username").all();return reply({students:rows.results.map(x=>({id:x.id,username:x.username,active:!!x.active,progress:x.data?JSON.parse(x.data):null,updated_at:x.updated_at}))});}
 if(path==="/api/students"&&request.method==="POST"){const b=await parse(request);if(!validName(b.username)||!validPass(b.password))return reply({error:"Invalid username or password"},400);return reply(await createUser(env,b.username,b.password,"student"),201);}
@@ -32,7 +32,19 @@ if(placement&&request.method==="POST"){
  if(!student)return reply({error:"Student not found"},404);
  const saved=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(student.id).first();
  let old={};try{old=saved?JSON.parse(saved.data):{}}catch{}
- const progress={world:old.world==="dungeon"?"dungeon":"space",mission,xp:b.resetXp?0:Math.max(0,Math.min(100000,Number(old.xp)||0))};
+ const progress={world:old.world==="dungeon"?"dungeon":"space",mission,xp:b.resetXp?0:Math.max(0,Math.min(100000,Number(old.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(old.defaultMode)?old.defaultMode:"hybrid"};
+ await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(student.id,JSON.stringify(progress)).run();
+ return reply({ok:true,progress});
+}
+const modeMatch=path.match(/^\/api\/students\/([a-f0-9-]{36})\/default-mode$/i);
+if(modeMatch&&request.method==="POST"){
+ const b=await parse(request);
+ if(!["hybrid","code","terminal"].includes(b.mode))return reply({error:"Invalid learning mode"},400);
+ const student=await env.DB.prepare("SELECT id FROM users WHERE id=? AND role='student'").bind(modeMatch[1]).first();
+ if(!student)return reply({error:"Student not found"},404);
+ const saved=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(student.id).first();
+ let old={};try{old=saved?JSON.parse(saved.data):{}}catch{}
+ const progress={world:old.world==="dungeon"?"dungeon":"space",mission:Math.max(1,Math.min(6,Number(old.mission)||1)),xp:Math.max(0,Math.min(100000,Number(old.xp)||0)),defaultMode:b.mode};
  await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(student.id,JSON.stringify(progress)).run();
  return reply({ok:true,progress});
 }
