@@ -1,2 +1,2 @@
-// Replace with your deployed Cloudflare Worker URL, without trailing slash.
-window.PYTHONQUEST_API = 'https://pythonquest-api.YOUR-SUBDOMAIN.workers.dev';
+// Cloudflare Worker API endpoint (public URL; no credentials here).
+window.PYTHONQUEST_API = 'https://pythonquest-api.dddn28wb5d.workers.dev';
