@@ -117,14 +117,28 @@ if(nicknameReview&&request.method==="POST"){
  return reply({ok:true,approved:b.approve});
 }
 const CLUB_AWARD_IDS=["mentor","teamwork","creativity","debugger"];
+const validBadgeId=(id,defs)=>CLUB_AWARD_IDS.includes(id)||(typeof id==="string"&&Array.isArray(defs)&&defs.some(d=>d.id===id));
+const badgeCatalog=async env=>{const row=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind("club:badge-catalog").first();let defs=[];try{defs=JSON.parse(row?.data||"[]")}catch{}return Array.isArray(defs)?defs:[];};
+if(path==="/api/club/badges/catalog"&&request.method==="GET"){return reply({badges:await badgeCatalog(env)});}
+if(path==="/api/club/badges/catalog"&&request.method==="POST"){
+ if(user.role!=="teacher")return reply({error:"Advisor only"},403);
+ const b=await parse(request);
+ if(typeof b.name!=="string"||b.name.trim().length<3||b.name.trim().length>48||typeof b.description!=="string"||b.description.length>180||typeof b.icon!=="string"||!["star","rocket","shield","lightbulb","trophy","heart","code"].includes(b.icon))return reply({error:"Invalid badge details"},400);
+ const defs=await badgeCatalog(env);if(defs.length>=40)return reply({error:"Badge catalog full"},400);
+ const badge={id:"custom:"+random(),name:b.name.trim(),description:b.description.trim(),icon:b.icon,createdAt:new Date().toISOString()};
+ defs.push(badge);
+ await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data").bind("club:badge-catalog",JSON.stringify(defs)).run();
+ return reply({badge},201);
+}
+
 if(path==="/api/club/badges/award"&&request.method==="POST"){
  if(user.role!=="teacher")return reply({error:"Advisor only"},403);
  const b=await parse(request);
- if(typeof b.studentId!=="string"||!CLUB_AWARD_IDS.includes(b.badge))return reply({error:"Invalid award"},400);
+ if(typeof b.studentId!=="string"||!validBadgeId(b.badge,await badgeCatalog(env)))return reply({error:"Invalid award"},400);
  const row=await env.DB.prepare("SELECT s.data FROM saves s JOIN users u ON u.id=s.user_id WHERE u.id=? AND u.role='student'").bind(b.studentId).first();
  if(!row)return reply({error:"Student not found"},404);
  let p={};try{p=JSON.parse(row.data||"{}")}catch{}
- p.clubAwards=Array.isArray(p.clubAwards)?p.clubAwards.filter(x=>CLUB_AWARD_IDS.includes(x)):[];
+ p.clubAwards=Array.isArray(p.clubAwards)?p.clubAwards:[];
  if(!p.clubAwards.includes(b.badge)){p.clubAwards.push(b.badge);p.clubAwardDates={...(p.clubAwardDates||{}),[b.badge]:new Date().toISOString()};appendBadgeEvent(p,{action:"awarded",badge:b.badge,advisor:user.id});}
  await env.DB.prepare("UPDATE saves SET data=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?").bind(JSON.stringify(p),b.studentId).run();
  return reply({ok:true,awards:p.clubAwards});
@@ -132,7 +146,7 @@ if(path==="/api/club/badges/award"&&request.method==="POST"){
 if(path==="/api/club/badges/remove"&&request.method==="POST"){
  if(user.role!=="teacher")return reply({error:"Advisor only"},403);
  const b=await parse(request);
- if(!CLUB_AWARD_IDS.includes(b.badge)||typeof b.studentId!=="string")return reply({error:"Invalid request"},400);
+ if(!validBadgeId(b.badge,await badgeCatalog(env))||typeof b.studentId!=="string")return reply({error:"Invalid request"},400);
  const row=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(b.studentId).first();
  if(!row)return reply({error:"No saved student"},404);
  let p={};try{p=JSON.parse(row.data)}catch{}
@@ -143,7 +157,7 @@ if(path==="/api/club/badges/remove"&&request.method==="POST"){
 if(path==="/api/club/achievements"&&request.method==="GET"){
  if(user.role!=="student")return reply({error:"Student only"},403);
  const row=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();let p={};try{p=JSON.parse(row?.data||"{}")}catch{}
- return reply({badges:badgeKeys(p),dates:p.badgeDates||{},special:p.clubAwards||[],specialDates:p.clubAwardDates||{},events:p.badgeEvents||[]});
+ return reply({badges:badgeKeys(p),dates:p.badgeDates||{},special:p.clubAwards||[],specialDates:p.clubAwardDates||{}});
 }
 if(path==="/api/club/achievements/notifications"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
