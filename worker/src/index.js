@@ -20,7 +20,7 @@ const user=await auth(request,env);if(!user)return reply({error:"Unauthorized"},
 if(path==="/api/logout"&&request.method==="POST"){const token=request.headers.get("authorization").slice(7);await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?").bind(await digest(token)).run();return reply({ok:true});}
 if(path==="/api/me"&&request.method==="GET")return reply({user});
 if(path==="/api/progress"&&request.method==="GET"){const row=await env.DB.prepare("SELECT data,updated_at FROM saves WHERE user_id=?").bind(user.id).first();return reply({progress:row?JSON.parse(row.data):null,updated_at:row?.updated_at||null});}
-if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")return reply({error:"Student only"},403);const b=await parse(request);if(!b||typeof b!=="object"||Array.isArray(b)||JSON.stringify(b).length>16000)return reply({error:"Invalid progress"},400);const existing=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();let previous={};try{previous=existing?JSON.parse(existing.data):{}}catch{}const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:Math.max(1,Math.min(6,Number(b.mission)||1)),xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid",skills:Array.isArray(previous.skills)?previous.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[]};await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
+if(path==="/api/progress"&&request.method==="POST"){if(user.role!=="student")return reply({error:"Student only"},403);const b=await parse(request);if(!b||typeof b!=="object"||Array.isArray(b)||JSON.stringify(b).length>16000)return reply({error:"Invalid progress"},400);const existing=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();let previous={};try{previous=existing?JSON.parse(existing.data):{}}catch{}const progress={world:["space","dungeon"].includes(b.world)?b.world:"space",mission:Math.max(1,Math.min(6,Number(b.mission)||1)),xp:Math.max(0,Math.min(100000,Number(b.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(previous.defaultMode)?previous.defaultMode:"hybrid",skills:Array.isArray(previous.skills)?previous.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(1,Math.min(2,Number(previous.releasedRegion)||Math.ceil((Number(previous.mission)||1)/4)))};if(progress.mission>progress.releasedRegion*4)return reply({error:"This region has not been released by your teacher"},403);await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();return reply({ok:true,progress});}
 if(path==="/api/skills/complete"&&request.method==="POST"){
  if(user.role!=="student")return reply({error:"Student only"},403);
  const b=await parse(request),skill=Number(b.skill);
@@ -28,7 +28,7 @@ if(path==="/api/skills/complete"&&request.method==="POST"){
  const saved=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(user.id).first();
  let old={};try{old=saved?JSON.parse(saved.data):{}}catch{}
  const skills=[...new Set([...(Array.isArray(old.skills)?old.skills:[]),skill])].filter(x=>Number.isInteger(x)&&x>=1&&x<=6).sort((a,b)=>a-b);
- const progress={world:old.world==="dungeon"?"dungeon":"space",mission:Math.max(1,Math.min(6,Number(old.mission)||1)),xp:Math.max(0,Math.min(100000,Number(old.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(old.defaultMode)?old.defaultMode:"hybrid",skills};
+ const progress={world:old.world==="dungeon"?"dungeon":"space",mission:Math.max(1,Math.min(6,Number(old.mission)||1)),xp:Math.max(0,Math.min(100000,Number(old.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(old.defaultMode)?old.defaultMode:"hybrid",skills,releasedRegion:Math.max(1,Math.min(2,Number(old.releasedRegion)||Math.ceil((Number(old.mission)||1)/4)))};
  await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(user.id,JSON.stringify(progress)).run();
  return reply({ok:true,skills});
 }
@@ -43,7 +43,19 @@ if(placement&&request.method==="POST"){
  if(!student)return reply({error:"Student not found"},404);
  const saved=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(student.id).first();
  let old={};try{old=saved?JSON.parse(saved.data):{}}catch{}
- const progress={world:old.world==="dungeon"?"dungeon":"space",mission,xp:b.resetXp?0:Math.max(0,Math.min(100000,Number(old.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(old.defaultMode)?old.defaultMode:"hybrid",skills:Array.isArray(old.skills)?old.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[]};
+ const progress={world:old.world==="dungeon"?"dungeon":"space",mission,xp:b.resetXp?0:Math.max(0,Math.min(100000,Number(old.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(old.defaultMode)?old.defaultMode:"hybrid",skills:Array.isArray(old.skills)?old.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(Math.ceil(mission/4),Math.max(1,Math.min(2,Number(old.releasedRegion)||Math.ceil((Number(old.mission)||1)/4))))};
+ await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(student.id,JSON.stringify(progress)).run();
+ return reply({ok:true,progress});
+}
+const releaseMatch=path.match(/^\/api\/students\/([a-f0-9-]{36})\/release-region$/i);
+if(releaseMatch&&request.method==="POST"){
+ const b=await parse(request),region=Number(b.region);
+ if(!Number.isInteger(region)||region<1||region>2)return reply({error:"Only regions 1 and 2 are currently playable"},400);
+ const student=await env.DB.prepare("SELECT id FROM users WHERE id=? AND role='student'").bind(releaseMatch[1]).first();
+ if(!student)return reply({error:"Student not found"},404);
+ const saved=await env.DB.prepare("SELECT data FROM saves WHERE user_id=?").bind(student.id).first();
+ let old={};try{old=saved?JSON.parse(saved.data):{}}catch{}
+ const progress={world:old.world==="dungeon"?"dungeon":"space",mission:Math.max(1,Math.min(6,Number(old.mission)||1)),xp:Math.max(0,Math.min(100000,Number(old.xp)||0)),defaultMode:["hybrid","code","terminal"].includes(old.defaultMode)?old.defaultMode:"hybrid",skills:Array.isArray(old.skills)?old.skills.filter(x=>Number.isInteger(x)&&x>=1&&x<=6):[],releasedRegion:Math.max(region,Math.ceil((Number(old.mission)||1)/4))};
  await env.DB.prepare("INSERT INTO saves(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP").bind(student.id,JSON.stringify(progress)).run();
  return reply({ok:true,progress});
 }
